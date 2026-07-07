@@ -4,6 +4,7 @@ from .images import router as images_router
 from .text import router as text_router
 from .ixbt import router as ixbt_router
 from .drom import router as drom_router
+from .list import router as list_router
 
 __all__ = [
     'news_router', 
@@ -11,5 +12,6 @@ __all__ = [
     'images_router', 
     'text_router', 
     'ixbt_router',
-    'drom_router'
+    'drom_router',
+    'list_router'
 ]

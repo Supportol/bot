@@ -256,8 +256,19 @@ async def parse_ixbt_car(source_url: str) -> List[Dict]:
                     if 'ixbt.com' not in href:
                         continue
                     
-                    # 5. ПРОСТАЯ ФИЛЬТРАЦИЯ: новости имеют /news/ в URL
+                    # 5. ФИЛЬТРАЦИЯ: только автомобильные новости
                     if '/car/' not in href:
+                        continue
+
+                    # Исключаем категории (URL с только числами)
+                    # /car/3855/ — это категория (НЕ НУЖНА)
+                    # /car/deepal-g318-review.html — это статья (НУЖНА)
+                    if re.search(r'/car/\d+/$', href):
+                        print(f"[IXBT-CAR] ⚠️ Пропущена категория: {href}")
+                        continue
+
+                    # Исключаем главную страницу раздела
+                    if href == 'https://www.ixbt.com/car/' or href == 'https://www.ixbt.com/car':
                         continue
                     
                     # 6. Убираем дубликаты

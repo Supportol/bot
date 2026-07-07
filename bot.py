@@ -12,7 +12,8 @@ from handlers import (
     images_router, 
     text_router, 
     ixbt_router,
-    drom_router
+    drom_router,
+    list_router
 )
 
 # Настройка логирования
@@ -28,6 +29,7 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="news", description="📰 Получить новые публикации"),
         BotCommand(command="ixbt", description="🚗 Автомобильные новости iXBT"),
         BotCommand(command="drom", description="🚙 Новости Honda на Drom.ru"),
+        BotCommand(command="list", description="📋 Список всех публикаций (drom/ixbt)"),
         BotCommand(command="processing", description="⚙️ Извлечь текст публикаций (ID)"),
         BotCommand(command="images", description="🖼 Обработать изображение"),
         BotCommand(command="text", description="📝 Работа с текстом (скоро)")
@@ -56,7 +58,8 @@ async def main():
     # Подключаем роутеры
     dp.include_router(news_router)
     dp.include_router(ixbt_router)
-    dp.include_router(drom_router)  # НОВЫЙ РОУТЕР
+    dp.include_router(drom_router)
+    dp.include_router(list_router)  # НОВЫЙ РОУТЕР
     dp.include_router(processing_router)
     dp.include_router(images_router)
     dp.include_router(text_router)

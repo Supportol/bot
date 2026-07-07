@@ -4,7 +4,7 @@ from io import BytesIO
 from config import image_config
 
 async def process_image(image_bytes: bytes) -> bytes:
-    """Обрабатывает изображение: изменяет размер и сжимает"""
+    """Обрабатывает изображение: изменяет размер до точных width x height"""
     # Открываем изображение из байтов
     image = Image.open(BytesIO(image_bytes))
     
@@ -13,8 +13,9 @@ async def process_image(image_bytes: bytes) -> bytes:
     target_height = image_config['image_processing']['height']
     quality = image_config['image_processing']['quality']
     
-    # Изменяем размер с сохранением пропорций
-    image.thumbnail((target_width, target_height), Image.Resampling.LANCZOS)
+    # ИЗМЕНЯЕМ РАЗМЕР С РАСТЯГИВАНИЕМ/СЖАТИЕМ
+    # resize() меняет размер до ТОЧНЫХ размеров, игнорируя пропорции
+    image = image.resize((target_width, target_height), Image.Resampling.LANCZOS)
     
     # Конвертируем в RGB если нужно (для JPEG)
     if image.mode in ('RGBA', 'P'):

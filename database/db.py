@@ -108,3 +108,29 @@ async def get_latest_publications(limit: int = 5, source: str = None) -> list[di
             }
             for r in rows
         ]
+
+async def get_publications_by_source(source: str, limit: int = None) -> list[dict]:
+    """Получает все публикации из БД по источнику, отсортированные по дате (новые сверху)"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        if limit:
+            cursor = await db.execute(
+                "SELECT id, title, url, status, created_at FROM publications WHERE source = ? ORDER BY created_at DESC LIMIT ?",
+                (source, limit)
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT id, title, url, status, created_at FROM publications WHERE source = ? ORDER BY created_at DESC",
+                (source,)
+            )
+        
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "title": r[1],
+                "url": r[2],
+                "status": r[3],
+                "created_at": r[4]
+            }
+            for r in rows
+        ]
