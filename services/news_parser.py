@@ -39,52 +39,170 @@ async def parse_rss_feed(feed_url: str) -> List[Dict]:
 async def parse_drom_honda(source_url: str) -> List[Dict]:
     """Специализированный парсер для Drom.ru раздел Honda"""
     print(f"[DROM] Пытаюсь загрузить: {source_url}")
+    
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
             "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Referer": "https://www.drom.ru/",
         }
         
         async with aiohttp.ClientSession() as session:
             async with session.get(source_url, headers=headers, timeout=15) as response:
                 print(f"[DROM] Статус ответа: {response.status}")
-                if response.status == 200:
-                    html = await response.text()
-                    print(f"[DROM] Получено байт: {len(html)}")
-                    soup = BeautifulSoup(html, 'lxml')
+                if response.status != 200:
+                    return []
+                
+                html = await response.text()
+                print(f"[DROM] Получено байт: {len(html)}")
+                soup = BeautifulSoup(html, 'lxml')
+                
+                items = []
+                seen_urls = set()
+                
+                # СТРАТЕГИЯ 1: Ищем блоки b-info-block (основная структура Drom)
+                print("[DROM] Стратегия 1: Поиск блоков b-info-block")
+                info_blocks = soup.find_all(class_=lambda x: x and 'b-info-block' in str(x))
+                print(f"[DROM] Найдено блоков b-info-block: {len(info_blocks)}")
+                
+                for block in info_blocks:
+                    # Ищем ссылку-заголовок внутри блока
+                    # Обычно это <a> с классом содержащим "link" или просто первая длинная ссылка
+                    link = block.find('a', href=True)
                     
-                    items = []
-                    news_links = soup.find_all('a', href=True)
+                    if not link:
+                        continue
                     
-                    for link in news_links:
+                    href = link.get('href', '')
+                    title = link.get_text(strip=True)
+                    
+                    # Если заголовок пустой или слишком короткий, ищем другой <a>
+                    if len(title) < 15:
+                        # Пробуем найти заголовок в h1-h4 внутри блока
+                        header = block.find(['h1', 'h2', 'h3', 'h4'])
+                        if header:
+                            title = header.get_text(strip=True)
+                            inner_link = header.find('a', href=True)
+                            if inner_link:
+                                href = inner_link.get('href', '')
+                    
+                    # Фильтруем по длине заголовка
+                    if len(title) < 15:
+                        continue
+                    
+                    # Убираем служебные слова
+                    if title in ['Читать далее', 'Подробнее', 'Все новости', 'Комментарии']:
+                        continue
+                    
+                    # Преобразуем относительный URL в абсолютный
+                    if not href.startswith('http'):
+                        href = urljoin(source_url, href)
+                    
+                    # Проверяем, что это Drom
+                    if 'drom.ru' not in href:
+                        continue
+                    
+                    # Фильтруем служебные ссылки
+                    if any(path in href for path in ['/users/', '/profile', '/login', '/register', '/search', '/tags/', '/all/', '/top/', '/forum/', '/feedback', '/about', '/contacts', '/advert', '/rss', '/sitemap', '/my_region']):
+                        continue
+                    
+                    # Убираем дубликаты
+                    if href in seen_urls:
+                        continue
+                    
+                    seen_urls.add(href)
+                    items.append({
+                        'title': title,
+                        'url': href,
+                        'source': source_url
+                    })
+                    
+                    print(f"[DROM] ✅ {title[:60]}... | {href}")
+                
+                # СТРАТЕГИЯ 2: Если не нашли, ищем все длинные ссылки с /info/ или /honda/
+                if len(items) == 0:
+                    print("[DROM] Стратегия 1 не сработала, пробую стратегию 2")
+                    all_links = soup.find_all('a', href=True)
+                    
+                    for link in all_links:
                         href = link.get('href', '')
                         title = link.get_text(strip=True)
                         
-                        if '/info/' in href or '/news/' in href:
-                            if len(title) >= 10 and title not in ['Читать далее', 'Подробнее', 'Все новости']:
-                                if not href.startswith('http'):
-                                    href = urljoin(source_url, href)
+                        if len(title) < 15:
+                            continue
+                        
+                        if not href.startswith('http'):
+                            href = urljoin(source_url, href)
+                        
+                        if 'drom.ru' not in href:
+                            continue
+                        
+                        # Новости Drom обычно имеют /info/ или числовой ID
+                        is_news = False
+                        if '/info/' in href:
+                            is_news = True
+                        elif re.search(r'/\d{7,}\.html', href):
+                            is_news = True
+                        elif '/honda/' in href and re.search(r'/\d+', href):
+                            is_news = True
+                        
+                        if not is_news:
+                            continue
+                        
+                        if href in seen_urls:
+                            continue
+                        
+                        seen_urls.add(href)
+                        items.append({
+                            'title': title,
+                            'url': href,
+                            'source': source_url
+                        })
+                        
+                        print(f"[DROM] ✅ (страт.2) {title[:60]}... | {href}")
+                
+                # СТРАТЕГИЯ 3: Если всё ещё ничего, ищем по датам
+                if len(items) == 0:
+                    print("[DROM] Стратегия 2 не сработала, пробую стратегию 3 (по датам)")
+                    # Ищем блоки с датами вида DD.MM.YYYY
+                    date_pattern = re.compile(r'\d{2}\.\d{2}\.\d{4}')
+                    date_elements = soup.find_all(string=date_pattern)
+                    
+                    for elem in date_elements:
+                        parent = elem.parent
+                        # Поднимаемся на 3-5 уровней вверх, чтобы найти контейнер новости
+                        for _ in range(5):
+                            if parent is None:
+                                break
+                            parent = parent.parent
+                            
+                            link = parent.find('a', href=True)
+                            if link:
+                                href = link.get('href', '')
+                                title = link.get_text(strip=True)
                                 
-                                if 'honda' in href.lower() or 'honda' in title.lower():
-                                    items.append({
-                                        'title': title,
-                                        'url': href,
-                                        'source': source_url
-                                    })
-                    
-                    seen_urls = set()
-                    unique_items = []
-                    for item in items:
-                        if item['url'] not in seen_urls:
-                            seen_urls.add(item['url'])
-                            unique_items.append(item)
-                    
-                    print(f"[DROM] Найдено новостей: {len(unique_items)}")
-                    return unique_items[:max_news_per_source]
+                                if len(title) >= 15 and 'drom.ru' in href:
+                                    if not href.startswith('http'):
+                                        href = urljoin(source_url, href)
+                                    
+                                    if href not in seen_urls and '/my_region' not in href:
+                                        seen_urls.add(href)
+                                        items.append({
+                                            'title': title,
+                                            'url': href,
+                                            'source': source_url
+                                        })
+                                        print(f"[DROM] ✅ (страт.3) {title[:60]}... | {href}")
+                                        break
+                
+                print(f"\n[DROM] ИТОГО найдено новостей: {len(items)}")
+                return items[:max_news_per_source]
                     
     except Exception as e:
         print(f"[DROM] ❌ Ошибка при парсинге {source_url}: {e}")
+        import traceback
+        traceback.print_exc()
         return []
     
     return []

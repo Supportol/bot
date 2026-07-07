@@ -21,23 +21,26 @@ async def init_db():
         await db.commit()
 
 async def save_publication(title: str, url: str, source: str) -> Optional[int]:
-    """Сохраняет новость и возвращает её ID"""
+    """Сохраняет новость и возвращает её ID. Возвращает None если уже существует."""
     async with aiosqlite.connect(DB_PATH) as db:
-        try:
-            cursor = await db.execute(
-                "INSERT INTO publications (title, url, source) VALUES (?, ?, ?)",
-                (title, url, source)
-            )
-            await db.commit()
-            return cursor.lastrowid
-        except aiosqlite.IntegrityError:
-            # Если ссылка уже есть, получаем её ID
-            cursor = await db.execute(
-                "SELECT id FROM publications WHERE url = ?", 
-                (url,)
-            )
-            row = await cursor.fetchone()
-            return row[0] if row else None
+        # Сначала проверяем, существует ли уже такая ссылка
+        cursor = await db.execute(
+            "SELECT id FROM publications WHERE url = ?", 
+            (url,)
+        )
+        row = await cursor.fetchone()
+        
+        if row:
+            # Уже есть в БД
+            return None
+        
+        # Сохраняем новую запись
+        cursor = await db.execute(
+            "INSERT INTO publications (title, url, source) VALUES (?, ?, ?)",
+            (title, url, source)
+        )
+        await db.commit()
+        return cursor.lastrowid
 
 async def get_publications_by_ids(ids: List[int]) -> List[Dict]:
     """Получает данные публикаций по списку ID"""

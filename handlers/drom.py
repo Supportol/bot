@@ -1,22 +1,22 @@
 from aiogram import Router, types
 from aiogram.filters import Command
-from services.news_parser import parse_ixbt_car
+from services.news_parser import parse_drom_honda
 from database.db import save_publication, get_latest_publications
 
 router = Router()
 
-@router.message(Command("ixbt"))
-async def cmd_ixbt(message: types.Message):
-    """Обработчик команды /ixbt - парсинг автомобильных новостей iXBT"""
-    await message.answer("⏳ Парсю автомобильные новости iXBT...")
+@router.message(Command("drom"))
+async def cmd_drom(message: types.Message):
+    """Обработчик команды /drom - парсинг новостей Honda на Drom.ru"""
+    await message.answer("🚗 Парсю новости Honda на Drom.ru...")
     
     try:
-        # ВСЕГДА парсим сайт, чтобы найти новые новости
-        raw_news = await parse_ixbt_car("https://www.ixbt.com/car/")
+        # ВСЕГДА парсим сайт
+        raw_news = await parse_drom_honda("https://news.drom.ru/honda/")
         
         if not raw_news:
             # Если парсер не нашёл ничего, показываем последние из БД
-            latest = await get_latest_publications(limit=5, source="https://www.ixbt.com/car/")
+            latest = await get_latest_publications(limit=5, source="https://news.drom.ru/honda/")
             
             if not latest:
                 await message.answer(
@@ -25,7 +25,7 @@ async def cmd_ixbt(message: types.Message):
                 )
                 return
             
-            result_text = "📋 <b>Последние сохранённые публикации (сайт недоступен):</b>\n\n"
+            result_text = "📋 <b>Последние сохранённые публикации Drom (Honda):</b>\n\n"
             for pub in latest:
                 status_icon = "✅" if pub['status'] == 'text_fetched' else "🆕"
                 result_text += f"{status_icon} [<b>ID: {pub['id']}</b>] {pub['title']}\n🔗 {pub['url']}\n\n"
@@ -37,12 +37,18 @@ async def cmd_ixbt(message: types.Message):
             )
             return
         
-        # Сохраняем в БД и формируем ответ
-        result_text = "🚗 <b>Автомобильные новости iXBT:</b>\n\n"
+        result_text = "🚙 <b>Новости Honda на Drom.ru:</b>\n\n"
+        new_count = 0
         
         for item in raw_news:
             pub_id = await save_publication(item['title'], item['url'], item['source'])
-            result_text += f"[<b>ID: {pub_id}</b>] {item['title']}\n🔗 {item['url']}\n\n"
+            if pub_id:  # Только если это новая запись
+                result_text += f"[<b>ID: {pub_id}</b>] {item['title']}\n🔗 {item['url']}\n\n"
+                new_count += 1
+        
+        if new_count == 0:
+            await message.answer("✅ Все новости уже в базе данных. Новых нет.")
+            return
         
         await message.answer(
             result_text, 
@@ -51,4 +57,4 @@ async def cmd_ixbt(message: types.Message):
         )
         
     except Exception as e:
-        await message.answer(f"❌ Ошибка при парсинге iXBT: {str(e)}")
+        await message.answer(f"❌ Ошибка при парсинге Drom: {str(e)}")
