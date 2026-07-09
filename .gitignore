@@ -7,3 +7,4 @@ images/**
 *.log
 *.pid
 venv
+news/**

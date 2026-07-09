@@ -91,7 +91,7 @@ newsbot/
 | `/list drom` / `/list ixbt` / `/list motor` | Таблица всех публикаций по источнику: **ID**, **дата/время**, **заголовок (ссылка)**. Новые сверху. Длинные ответы разбиваются (~4000 символов). |
 | `/processing IX_HON_1, IX_AC_2` | По ID скачивает страницы, извлекает текст (trafilatura), сохраняет в `full_text`, ставит `status = text_fetched`. |
 | `/images IX_HON_1, IX_AC_2` | Обрабатывает сохранённые обложки по ID. Без аргументов — просит указать ID. Также принимает `F.photo` и `F.document` (image/*) для произвольных фото. |
-| `/text` | Заглушка: «будет реализована позже». |
+| `/text` | Формирует экспорт-пакет по ID: `news/ДД.ММ.ГГГГ/<ID>/` с обработанным изображением и файлом `source.md`. Если ID не переданы — команда ждёт следующее сообщение с ID. |
 
 Статусы публикаций в ответах: 🆕 `new`, ✅ `text_fetched`.
 
@@ -227,6 +227,20 @@ images/09.07.2026/IX_AC_2/acura-predstavila-obnovlennuyu-model.webp
 
 `services/text_extractor.py`: HTTP GET → `trafilatura.extract()` с `favor_precision=True`. При пустом результате — `ValueError`.
 
+Fallback для `motor.ru`:
+
+- если страница возвращает auth-controller и `trafilatura` не извлекает текст,
+- основной fallback: `https://motor.ru/api/bebop/v2/topics/<encoded-link>?include=all`
+  - полный текст берётся из `included[type=content].attributes.widgets[].attributes.body`
+  - служебный блок `**Читайте также**` отрезается
+- резервный fallback: `headline + announce` из постраничного `topics` по точному совпадению `attributes.link`.
+
+Fallback для `ixbt.com`:
+
+- если `trafilatura` вернул служебный текст (например, «Перейти к содержимому») или пусто,
+- основной fallback: встроенный JSON `{"component":"Publication"}` → `props.publication.blocks[*].html` (полный текст статьи),
+- дополнительный fallback: `NewsArticle` JSON-LD (`headline + description`), если блоки не найдены.
+
 ## Обработка изображений
 
 Настройки в `config.json`:
@@ -297,7 +311,17 @@ images/09.07.2026/IX_AC_2/acura-predstavila-obnovlennuyu-model.webp
 3. Подключить в `bot.py` и добавить в `set_bot_commands()`
 4. **Обновить `AGENTS.md`**
 
-**Команда `/text`:** заглушка в `handlers/text.py` — место для будущего функционала преобразования текста.
+**Команда `/text`:**
+
+- принимает ID в команде (`/text IX_HON_1, MT_HON_3`) или ждёт следующее сообщение с ID
+- получает полный текст публикации:
+  - **всегда** заново извлекает по URL (`extract_text_from_url`) и обновляет БД (`status = text_fetched`)
+  - не использует ранее сохранённый `full_text` из БД (актуально для IXBT, Drom, Motor)
+- создаёт структуру экспорта:
+  - `news/ДД.ММ.ГГГГ/<ID>/`
+  - копирует обработанное изображение из `images/.../<ID>/res/*.jpg`
+  - создаёт `source.md` с исходным текстом статьи
+- отправляет отчёт в Telegram (успехи/ошибки/не найденные ID)
 
 ## Ограничения и заметки
 
