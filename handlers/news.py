@@ -1,13 +1,15 @@
 from aiogram import Router, types
 from aiogram.filters import Command
+
 from config import drom_sources_list
-from database.db import save_publication, get_latest_publications
+from database.db import get_latest_publications, save_publication, update_publication_cover_path
+from handlers.images import process_publication_covers
 from services.cover_storage import save_publication_cover
 from services.datetime_utils import format_publication_datetime
 from services.news_parser import parse_drom_honda, parse_ixbt_sources, parse_motor_sources
-from database.db import update_publication_cover_path
 
 router = Router()
+
 
 def _format_publication_line(pub: dict) -> str:
     line = f"[<b>ID: {pub['id']}</b>] {pub['title']}\n"
@@ -16,6 +18,7 @@ def _format_publication_line(pub: dict) -> str:
         line += f"🕐 {date}\n"
     line += f"🔗 {pub['url']}\n\n"
     return line
+
 
 @router.message(Command("news"))
 async def cmd_news(message: types.Message):
@@ -26,7 +29,6 @@ async def cmd_news(message: types.Message):
         raw_news = []
         seen_urls = set()
 
-        # 1) IXBT
         ixbt_items = await parse_ixbt_sources()
         for item in ixbt_items:
             if item["url"] in seen_urls:
@@ -34,7 +36,6 @@ async def cmd_news(message: types.Message):
             seen_urls.add(item["url"])
             raw_news.append(item)
 
-        # 2) DROM
         for source_url in drom_sources_list:
             drom_items = await parse_drom_honda(source_url)
             for item in drom_items:
@@ -43,7 +44,6 @@ async def cmd_news(message: types.Message):
                 seen_urls.add(item["url"])
                 raw_news.append(item)
 
-        # 3) MOTOR
         motor_items = await parse_motor_sources()
         for item in motor_items:
             if item["url"] in seen_urls:
@@ -65,11 +65,7 @@ async def cmd_news(message: types.Message):
                 status_icon = "✅" if pub["status"] == "text_fetched" else "🆕"
                 result_text += f"{status_icon} {_format_publication_line(pub)}"
 
-            await message.answer(
-                result_text,
-                parse_mode="HTML",
-                disable_web_page_preview=True,
-            )
+            await message.answer(result_text, parse_mode="HTML", disable_web_page_preview=True)
             return
 
         new_publications = []
@@ -107,11 +103,12 @@ async def cmd_news(message: types.Message):
         for pub in new_publications:
             result_text += _format_publication_line(pub)
 
-        await message.answer(
-            result_text,
-            parse_mode="HTML",
-            disable_web_page_preview=True,
-        )
+        processed_count, image_errors = await process_publication_covers(new_publications)
+        result_text += f"🖼 Автообработка обложек: {processed_count}/{len(new_publications)}\n"
+        if image_errors:
+            result_text += f"⚠️ Ошибок обработки: {len(image_errors)}\n"
+
+        await message.answer(result_text, parse_mode="HTML", disable_web_page_preview=True)
 
     except Exception as e:
         await message.answer(f"❌ Ошибка при поиске новостей: {str(e)}")

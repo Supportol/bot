@@ -1,6 +1,7 @@
 from aiogram import Router, types
 from aiogram.filters import Command
 
+from handlers.images import process_publication_covers
 from config import motor_sources_list
 from database.db import (
     get_latest_publications_by_sources,
@@ -94,6 +95,11 @@ async def cmd_motor(message: types.Message):
         result_text = f"🏎 <b>Новые Honda/Acura на Motor.ru ({len(new_publications)} шт.):</b>\n\n"
         for pub in new_publications:
             result_text += _format_publication_line(pub)
+
+        processed_count, image_errors = await process_publication_covers(new_publications)
+        result_text += f"🖼 Автообработка обложек: {processed_count}/{len(new_publications)}\n"
+        if image_errors:
+            result_text += f"⚠️ Ошибок обработки: {len(image_errors)}\n"
 
         await message.answer(
             result_text,
