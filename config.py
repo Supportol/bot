@@ -12,6 +12,7 @@ load_dotenv()
 class Settings(BaseSettings):
     bot_token: str
     news_sources: str
+    ixbt_sources: str = ""
     max_news_per_source: int = 5  # Значение по умолчанию
     
     class Config:
@@ -22,12 +23,18 @@ def get_settings() -> Settings:
     return Settings(
         bot_token=os.getenv("BOT_TOKEN"),
         news_sources=os.getenv("NEWS_SOURCES", ""),
+        ixbt_sources=os.getenv("IXBT_SOURCES", ""),
         max_news_per_source=int(os.getenv("MAX_NEWS_PER_SOURCE", "5"))
     )
 
 def get_news_sources_list() -> List[str]:
     """Получает список источников новостей"""
     raw = os.getenv("NEWS_SOURCES", "")
+    return [source.strip() for source in raw.split(',') if source.strip()]
+
+def get_ixbt_sources_list() -> List[str]:
+    """Получает список API-источников iXBT для команды /ixbt"""
+    raw = os.getenv("IXBT_SOURCES", "")
     return [source.strip() for source in raw.split(',') if source.strip()]
 
 def get_image_config() -> dict:
@@ -46,4 +53,5 @@ def get_max_news_per_source() -> int:
 settings = get_settings()
 image_config = get_image_config()
 news_sources_list = get_news_sources_list()
+ixbt_sources_list = get_ixbt_sources_list()
 max_news_per_source = get_max_news_per_source()
