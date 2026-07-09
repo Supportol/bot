@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     ixbt_sources: str = ""
     motor_honda_source: str = ""
     motor_acura_source: str = ""
+    text_api_key: str = ""
     max_news_per_source: int = 5  # Значение по умолчанию
     
     class Config:
@@ -28,6 +29,7 @@ def get_settings() -> Settings:
         ixbt_sources=os.getenv("IXBT_SOURCES", ""),
         motor_honda_source=os.getenv("MOTOR_HONDA_SOURCE", ""),
         motor_acura_source=os.getenv("MOTOR_ACURA_SOURCE", ""),
+        text_api_key=os.getenv("TEXT_API_KEY", ""),
         max_news_per_source=int(os.getenv("MAX_NEWS_PER_SOURCE", "5"))
     )
 

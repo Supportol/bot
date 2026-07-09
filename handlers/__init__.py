@@ -6,6 +6,7 @@ from .ixbt import router as ixbt_router
 from .drom import router as drom_router
 from .motor import router as motor_router
 from .list import router as list_router
+from .rewrite import router as rewrite_router
 
 __all__ = [
     'news_router', 
@@ -15,5 +16,6 @@ __all__ = [
     'ixbt_router',
     'drom_router',
     'motor_router',
-    'list_router'
+    'list_router',
+    'rewrite_router'
 ]

@@ -14,7 +14,8 @@ from handlers import (
     ixbt_router,
     drom_router,
     motor_router,
-    list_router
+    list_router,
+    rewrite_router,
 )
 
 # Настройка логирования
@@ -34,7 +35,8 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="list", description="📋 Список всех публикаций (drom/ixbt/motor)"),
         BotCommand(command="processing", description="⚙️ Извлечь текст публикаций (ID)"),
         BotCommand(command="images", description="🖼 Обработать обложки (ID) или фото"),
-        BotCommand(command="text", description="📝 Работа с текстом (скоро)")
+        BotCommand(command="text", description="📝 Экспорт исходного текста (ID)"),
+        BotCommand(command="rewrite", description="✍️ Рерайт текста через TEXT.ru (ID)"),
     ]
     
     await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
@@ -66,6 +68,7 @@ async def main():
     dp.include_router(processing_router)
     dp.include_router(images_router)
     dp.include_router(text_router)
+    dp.include_router(rewrite_router)
     
     logger.info("Бот запущен")
     

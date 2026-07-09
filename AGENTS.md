@@ -20,6 +20,7 @@ DROM_SOURCES=https://news.drom.ru/honda/
 IXBT_SOURCES=https://api.ixbt.com/v0/publications/search?search=HONDA,https://api.ixbt.com/v0/publications/search?search=ACURA
 MOTOR_HONDA_SOURCE=https://motor.ru/api/bebop/v2/search?query=Honda&offset=0&limit=15&include=image,rubric
 MOTOR_ACURA_SOURCE=https://motor.ru/api/bebop/v2/search?query=Acura&offset=0&limit=15&include=image,rubric
+TEXT_API_KEY=your_text_ru_api_key
 MAX_NEWS_PER_SOURCE=5
 ```
 
@@ -66,10 +67,12 @@ newsbot/
 │   ├── list.py                # /list <drom|ixbt|motor> — таблица публикаций
 │   ├── processing.py          # /processing <ID,...> — извлечение текста
 │   ├── images.py              # /images <ID,...> + приём фото/документов
-│   └── text.py                # /text — заглушка (не реализовано)
+│   ├── text.py                # /text <ID,...> — экспорт source.md + изображения
+│   └── rewrite.py             # /rewrite <ID,...> — рерайт текста через TEXT.ru API
 ├── services/
 │   ├── news_parser.py         # Парсеры RSS, HTML, iXBT API
 │   ├── text_extractor.py      # trafilatura: полный текст по URL
+│   ├── rewrite_service.py     # Клиент TEXT.ru: создание задачи и polling результата
 │   ├── image_processor.py     # Resize + размытый фон (Pillow)
 │   ├── cover_storage.py       # Скачивание обложек iXBT
 │   ├── publication_id.py      # Генерация строковых ID по источнику
@@ -92,6 +95,7 @@ newsbot/
 | `/processing IX_HON_1, IX_AC_2` | По ID скачивает страницы, извлекает текст (trafilatura), сохраняет в `full_text`, ставит `status = text_fetched`. |
 | `/images IX_HON_1, IX_AC_2` | Обрабатывает сохранённые обложки по ID. Без аргументов — просит указать ID. Также принимает `F.photo` и `F.document` (image/*) для произвольных фото. |
 | `/text` | Формирует экспорт-пакет по ID: `news/ДД.ММ.ГГГГ/<ID>/` с обработанным изображением и файлом `source.md`. Если ID не переданы — команда ждёт следующее сообщение с ID. |
+| `/rewrite IX_HON_1, DR_HON_1` | Запускает рерайт исходного текста по ID через TEXT.ru API, ждёт результат и сохраняет `news.md` в папку новости (`news/ДД.ММ.ГГГГ/<ID>/news.md`). Если ID не переданы — команда ждёт следующее сообщение с ID. |
 
 Статусы публикаций в ответах: 🆕 `new`, ✅ `text_fetched`.
 
@@ -279,6 +283,7 @@ Fallback для `ixbt.com`:
   - `IXBT_SOURCES` — API URL для `/ixbt` и `/list ixbt` (через запятую)
   - `MOTOR_HONDA_SOURCE` — API URL для `/motor` и `/list motor` (Honda)
   - `MOTOR_ACURA_SOURCE` — API URL для `/motor` и `/list motor` (Acura)
+  - `TEXT_API_KEY` — ключ авторизации для API рерайта TEXT.ru (команда `/rewrite`)
   - `MAX_NEWS_PER_SOURCE` — лимит новостей с одного источника (по умолчанию 5)
 - **`config.json`** — только параметры изображений (не секреты)
 - **`config.py`** — `settings`, `drom_sources_list`, `ixbt_sources_list`, `motor_sources_list`, `image_config`, `max_news_per_source`
@@ -323,6 +328,20 @@ Fallback для `ixbt.com`:
   - создаёт `source.md` с исходным текстом статьи
 - отправляет отчёт в Telegram (успехи/ошибки/не найденные ID)
 
+**Команда `/rewrite`:**
+
+- принимает ID в команде (`/rewrite IX_HON_1, MT_HON_3`) или ждёт следующее сообщение с ID
+- берёт исходный текст публикации:
+  - если `full_text` уже есть в БД — использует его
+  - если текста нет — извлекает по URL (`extract_text_from_url`) и сохраняет в БД
+- отправляет текст в TEXT.ru API (`services/rewrite_service.py`):
+  - перед запуском рерайта проверяет баланс через `GET https://api.text.ru/neurotools/api/v1/balance` с заголовком `X-USERKEY` (берётся из `TEXT_API_KEY`)
+  - создаёт задачу рерайта
+  - опрашивает статус задачи до готового результата
+- сохраняет результат в `news.md` в директории новости `news/ДД.ММ.ГГГГ/<ID>/`
+  - файл содержит только готовый рерайт (без заголовка/URL/исходного текста)
+- отправляет отчёт в Telegram (успехи/ошибки/не найденные ID)
+
 ## Ограничения и заметки
 
 - README устарел относительно текущего функционала — ориентироваться на `AGENTS.md`
@@ -338,3 +357,5 @@ Fallback для `ixbt.com`:
 2. `/list ixbt` или `/list motor` — просмотреть таблицу всех сохранённых
 3. `/processing IX_HON_1, IX_AC_2` — извлечь полный текст статей в БД
 4. `/images IX_HON_1` — обработать сохранённые обложки (или отправить произвольное фото)
+5. `/text IX_HON_1` — собрать экспорт с `source.md` и изображением в `news/.../<ID>/`
+6. `/rewrite IX_HON_1` — получить рерайт и сохранить его в `news/.../<ID>/news.md`
