@@ -1,13 +1,11 @@
 from aiogram import Router, types
 from aiogram.filters import Command
+
+from database.db import get_latest_publications, save_publication, update_publication_cover_path
+from handlers.images import process_publication_covers
 from services.news_parser import parse_drom_honda
 from services.cover_storage import save_publication_cover
 from services.datetime_utils import format_publication_datetime
-from database.db import (
-    save_publication,
-    update_publication_cover_path,
-    get_latest_publications,
-)
 
 router = Router()
 
@@ -85,6 +83,11 @@ async def cmd_drom(message: types.Message):
 
         for pub in new_publications:
             result_text += _format_publication_line(pub)
+
+        processed_count, image_errors = await process_publication_covers(new_publications)
+        result_text += f"🖼 Автообработка обложек: {processed_count}/{len(new_publications)}\n"
+        if image_errors:
+            result_text += f"⚠️ Ошибок обработки: {len(image_errors)}\n"
 
         await message.answer(
             result_text,

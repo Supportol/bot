@@ -9,6 +9,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 from database.db import get_publications_by_ids, update_publication_text
 from services.publication_id import parse_publication_ids
+from services.rewrite_service import RewriteError, rewrite_text_via_text_ru
 from services.text_extractor import extract_text_from_url
 
 router = Router()
@@ -24,6 +25,14 @@ def _build_markdown(pub: dict, text: str) -> str:
     title = (pub.get("title") or "Без заголовка").strip()
     url = (pub.get("url") or "").strip()
     return f"# {title}\n\nИсточник: {url}\n\n---\n\n{text.strip()}\n"
+
+
+def _build_news_md(rewritten_text: str) -> str:
+    text = (rewritten_text or "").strip()
+    if not text:
+        return ""
+    paragraphs = [chunk.strip() for chunk in text.split("\n\n") if chunk.strip()]
+    return "\n".join(f"<p>{paragraph}</p>" for paragraph in paragraphs) + "\n"
 
 def _find_processed_image(pub: dict) -> Path | None:
     """Ищет обработанное изображение в images/.../<id>/res/*.jpg."""
@@ -43,7 +52,7 @@ def _find_processed_image(pub: dict) -> Path | None:
     return None
 
 async def _process_ids(message: types.Message, ids: list[str], state: FSMContext):
-    await message.answer(f"⏳ Подготавливаю материалы для {len(ids)} публикаций...")
+    await message.answer(f"⏳ Подготавливаю материалы и рерайт для {len(ids)} публикаций...")
 
     publications = await get_publications_by_ids(ids)
     found_ids = {pub["id"] for pub in publications}
@@ -57,6 +66,7 @@ async def _process_ids(message: types.Message, ids: list[str], state: FSMContext
         try:
             source_text = await extract_text_from_url(pub["url"])
             await update_publication_text(pub["id"], source_text)
+            rewritten_text = await rewrite_text_via_text_ru(source_text, creative=5)
 
             processed_image = _find_processed_image(pub)
             if not processed_image:
@@ -71,14 +81,19 @@ async def _process_ids(message: types.Message, ids: list[str], state: FSMContext
 
             md_path = target_dir / "source.md"
             md_path.write_text(_build_markdown(pub, source_text), encoding="utf-8")
+            news_md_path = target_dir / "news.md"
+            news_md_path.write_text(_build_news_md(rewritten_text), encoding="utf-8")
             success_count += 1
+        except RewriteError as e:
+            errors.append(f"{pub['id']}: ошибка рерайта: {str(e)[:120]}")
         except Exception as e:
             errors.append(f"{pub['id']}: {str(e)[:120]}")
 
     report = (
         "✅ Команда /text завершена.\n"
         f"📁 Папка: <code>news/{date_dir}</code>\n"
-        f"📊 Успешно: {success_count}"
+        f"📊 Успешно: {success_count}\n"
+        "📝 Файлы: <code>source.md</code> + <code>news.md</code>"
     )
     if missing_ids:
         report += f"\n⚠️ ID не найдены в БД: {', '.join(missing_ids)}"

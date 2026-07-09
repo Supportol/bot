@@ -15,6 +15,42 @@ router = Router()
 CURRENT_DATE_FMT = "%d.%m.%Y"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
+
+async def process_publication_covers(publications: list[dict]) -> tuple[int, list[str]]:
+    """
+    Обрабатывает обложки публикаций и сохраняет в images/.../<ID>/res/*.jpg.
+    Возвращает: (успешно обработано, список ошибок).
+    """
+    success_count = 0
+    errors: list[str] = []
+
+    for pub in publications:
+        cover_path = None
+        if pub.get("cover_path"):
+            candidate = PROJECT_ROOT / pub["cover_path"]
+            if candidate.exists():
+                cover_path = candidate
+
+        if cover_path is None:
+            cover_path = get_publication_cover_path(pub["id"])
+
+        if not cover_path or not cover_path.exists():
+            errors.append(f"ID {pub['id']}: обложка не найдена")
+            continue
+
+        try:
+            processed_bytes = await process_image(cover_path.read_bytes())
+            source_dir = cover_path.parent
+            res_dir = source_dir / "res"
+            res_dir.mkdir(parents=True, exist_ok=True)
+            output_path = res_dir / f"{cover_path.stem}.jpg"
+            output_path.write_bytes(processed_bytes)
+            success_count += 1
+        except Exception as e:
+            errors.append(f"ID {pub['id']}: {str(e)[:100]}")
+
+    return success_count, errors
+
 def _find_original_cover(pub_dir: Path) -> Path | None:
     """Ищет оригинал обложки в директории публикации (без res)."""
     if not pub_dir.exists() or not pub_dir.is_dir():
@@ -96,8 +132,7 @@ async def cmd_images_start(message: types.Message):
     found_ids = {pub["id"] for pub in publications}
     missing_ids = [pub_id for pub_id in ids if pub_id not in found_ids]
 
-    success_count = 0
-    errors = []
+    success_count, errors = await process_publication_covers(publications)
 
     for pub in publications:
         cover_path = None
@@ -105,30 +140,15 @@ async def cmd_images_start(message: types.Message):
             candidate = PROJECT_ROOT / pub["cover_path"]
             if candidate.exists():
                 cover_path = candidate
-
         if cover_path is None:
             cover_path = get_publication_cover_path(pub["id"])
-
         if not cover_path or not cover_path.exists():
-            errors.append(f"ID {pub['id']}: обложка не найдена")
             continue
-
-        try:
-            processed_bytes = await process_image(cover_path.read_bytes())
-            source_dir = cover_path.parent
-
-            res_dir = source_dir / "res"
-            res_dir.mkdir(parents=True, exist_ok=True)
-            output_path = res_dir / f"{cover_path.stem}.jpg"
-            output_path.write_bytes(processed_bytes)
-
+        output_path = cover_path.parent / "res" / f"{cover_path.stem}.jpg"
+        if output_path.exists():
             processed_photo = FSInputFile(output_path)
             caption = f"✅ ID {pub['id']}: {pub['title'][:120]}"
             await message.answer_photo(processed_photo, caption=caption)
-            success_count += 1
-
-        except Exception as e:
-            errors.append(f"ID {pub['id']}: {str(e)[:100]}")
 
     report = f"✅ Обработано изображений: {success_count}"
     if missing_ids:
