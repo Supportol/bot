@@ -27,11 +27,11 @@ async def set_bot_commands(bot: Bot):
     """Устанавливает меню команд бота"""
     commands = [
         BotCommand(command="news", description="📰 Получить новые публикации"),
-        BotCommand(command="ixbt", description="🚗 Автомобильные новости iXBT"),
+        BotCommand(command="ixbt", description="🚗 Новости Honda/Acura iXBT"),
         BotCommand(command="drom", description="🚙 Новости Honda на Drom.ru"),
         BotCommand(command="list", description="📋 Список всех публикаций (drom/ixbt)"),
         BotCommand(command="processing", description="⚙️ Извлечь текст публикаций (ID)"),
-        BotCommand(command="images", description="🖼 Обработать изображение"),
+        BotCommand(command="images", description="🖼 Обработать обложки (ID) или фото"),
         BotCommand(command="text", description="📝 Работа с текстом (скоро)")
     ]
     

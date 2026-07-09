@@ -1,13 +1,14 @@
 from aiogram import Router, types
 from aiogram.filters import Command
-from database.db import get_publications_by_source
+from database.db import get_publications_by_source, get_publications_by_sources
+from config import ixbt_sources_list
 
 router = Router()
 
 # Маппинг аргументов к реальным URL источников
 SOURCE_MAPPING = {
-    "drom": "https://news.drom.ru/honda/",
-    "ixbt": "https://www.ixbt.com/car/",
+    "drom": ["https://news.drom.ru/honda/"],
+    "ixbt": ixbt_sources_list,
 }
 
 @router.message(Command("list"))
@@ -20,7 +21,7 @@ async def cmd_list(message: types.Message):
         await message.answer(
             "⚠️ Укажите источник. Примеры:\n"
             "• <code>/list drom</code> - все новости Honda с Drom.ru\n"
-            "• <code>/list ixbt</code> - все новости с iXBT Car",
+            "• <code>/list ixbt</code> - все новости Honda/Acura с iXBT",
             parse_mode="HTML"
         )
         return
@@ -33,20 +34,30 @@ async def cmd_list(message: types.Message):
             f"⚠️ Неизвестный источник: <b>{source_key}</b>\n\n"
             "Доступные источники:\n"
             "• <code>drom</code> - Drom.ru (Honda)\n"
-            "• <code>ixbt</code> - iXBT (Автомобили)",
+            "• <code>ixbt</code> - iXBT (Honda/Acura)",
             parse_mode="HTML"
         )
         return
     
-    source_url = SOURCE_MAPPING[source_key]
-    
-    # Получаем все публикации из БД
-    publications = await get_publications_by_source(source_url)
+    source_urls = SOURCE_MAPPING[source_key]
+
+    if source_key == "ixbt" and not source_urls:
+        await message.answer(
+            "⚠️ Не настроены источники iXBT.\n"
+            "Добавьте <code>IXBT_SOURCES</code> в файл <code>.env</code>.",
+            parse_mode="HTML",
+        )
+        return
+
+    if len(source_urls) == 1:
+        publications = await get_publications_by_source(source_urls[0])
+    else:
+        publications = await get_publications_by_sources(source_urls)
     
     if not publications:
         source_names = {
             "drom": "Drom.ru (Honda)",
-            "ixbt": "iXBT (Автомобили)"
+            "ixbt": "iXBT (Honda/Acura)"
         }
         await message.answer(
             f"📭 В базе данных нет публикаций из источника <b>{source_names[source_key]}</b>.\n\n"
@@ -58,7 +69,7 @@ async def cmd_list(message: types.Message):
     # Формируем ответ
     source_names = {
         "drom": "🚙 Drom.ru (Honda)",
-        "ixbt": "🚗 iXBT (Автомобили)"
+        "ixbt": "🚗 iXBT (Honda/Acura)"
     }
     
     result_text = f"📋 <b>Все публикации: {source_names[source_key]}</b>\n"
@@ -70,7 +81,10 @@ async def cmd_list(message: types.Message):
     
     for pub in publications:
         status_icon = "✅" if pub['status'] == 'text_fetched' else "🆕"
-        item_text = f"{status_icon} [<b>ID: {pub['id']}</b>] {pub['title']}\n🔗 {pub['url']}\n\n"
+        item_text = f"{status_icon} [<b>ID: {pub['id']}</b>] {pub['title']}\n"
+        if pub.get("published_at"):
+            item_text += f"🕐 {pub['published_at']}\n"
+        item_text += f"🔗 {pub['url']}\n\n"
         
         # Проверяем, не превысит ли сообщение лимит Telegram (4096 символов)
         if len(current_message + item_text) > 4000:

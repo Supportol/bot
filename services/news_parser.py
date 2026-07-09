@@ -1,13 +1,71 @@
 import aiohttp
 import feedparser
+import json
 from typing import List, Dict
 from bs4 import BeautifulSoup
 import asyncio
 from database.db import check_url_exists
-from config import news_sources_list, max_news_per_source
-from urllib.parse import urljoin, urlparse
+from config import news_sources_list, ixbt_sources_list, max_news_per_source
+from urllib.parse import urljoin, urlparse, parse_qs, urlencode, urlunparse
 import re
 from pathlib import Path
+
+IXBT_BRAND_PATTERNS = {
+    "ACURA": re.compile(r"\bAcura\b|\bАкура\b", re.IGNORECASE),
+    "HONDA": re.compile(r"\bHonda\b|\bХонда\b", re.IGNORECASE),
+}
+
+def _get_ixbt_search_brand(api_url: str) -> str | None:
+    """Извлекает бренд из параметра search в URL API iXBT."""
+    params = parse_qs(urlparse(api_url).query)
+    search = params.get("search", [None])[0]
+    return search.strip().upper() if search else None
+
+def _ixbt_publication_mentions_brand(pub: dict, brand: str) -> bool:
+    """Проверяет прямое упоминание бренда в заголовке, подзаголовке и тегах."""
+    pattern = IXBT_BRAND_PATTERNS.get(
+        brand.upper(),
+        re.compile(rf"\b{re.escape(brand)}\b", re.IGNORECASE),
+    )
+    text_parts = [
+        pub.get("title", ""),
+        pub.get("subtitle", ""),
+        " ".join(tag.get("name", "") for tag in pub.get("tags", [])),
+    ]
+    return bool(pattern.search(" ".join(text_parts)))
+
+def _ixbt_api_page_url(api_url: str, page: int) -> str:
+    """Подставляет номер страницы в URL API iXBT."""
+    parsed = urlparse(api_url)
+    params = parse_qs(parsed.query)
+    params["page"] = [str(page)]
+    return urlunparse(parsed._replace(query=urlencode(params, doseq=True)))
+
+def _ixbt_source_key(api_url: str) -> str:
+    """Нормализует URL источника (всегда page=1) для хранения в БД."""
+    return _ixbt_api_page_url(api_url, 1)
+
+def _ixbt_publication_datetime(pub: dict) -> str | None:
+    """Возвращает отображаемую дату публикации из ответа API."""
+    return pub.get("formated_pubdatetime") or pub.get("pubdatetime")
+
+def _parse_ixbt_publication(pub: dict, source_key: str, search_brand: str | None) -> Dict | None:
+    url = pub.get("url") or (pub.get("urls") or {}).get("ru")
+    title = (pub.get("title") or "").strip()
+    if not title or not url:
+        return None
+
+    if search_brand and not _ixbt_publication_mentions_brand(pub, search_brand):
+        print(f"[IXBT-API] ⚠️ Пропущено (нет упоминания {search_brand}): {title[:50]}...")
+        return None
+
+    return {
+        "title": title,
+        "url": url,
+        "source": source_key,
+        "cover_url": pub.get("cover_url"),
+        "published_at": _ixbt_publication_datetime(pub),
+    }
 
 async def parse_rss_feed(feed_url: str) -> List[Dict]:
     """Парсит RSS фид"""
@@ -206,6 +264,94 @@ async def parse_drom_honda(source_url: str) -> List[Dict]:
         return []
     
     return []
+
+async def parse_ixbt_api(api_url: str) -> List[Dict]:
+    """Парсер API iXBT: /api/publications/search с пагинацией."""
+    print(f"[IXBT-API] Пытаюсь загрузить: {api_url}")
+
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Referer": "https://www.ixbt.com/",
+        }
+
+        search_brand = _get_ixbt_search_brand(api_url)
+        source_key = _ixbt_source_key(api_url)
+        items = []
+        page = 1
+        last_page = 1
+        max_pages = 30
+
+        async with aiohttp.ClientSession() as session:
+            while len(items) < max_news_per_source and page <= last_page and page <= max_pages:
+                page_url = _ixbt_api_page_url(api_url, page)
+                print(f"[IXBT-API] Страница {page}: {page_url}")
+
+                async with session.get(page_url, headers=headers, timeout=15) as response:
+                    print(f"[IXBT-API] Статус ответа: {response.status}")
+                    if response.status != 200:
+                        break
+
+                    data = await response.json()
+
+                meta = data.get("meta", {})
+                last_page = meta.get("last_page", page)
+
+                for pub in data.get("data", []):
+                    if len(items) >= max_news_per_source:
+                        break
+
+                    item = _parse_ixbt_publication(pub, source_key, search_brand)
+                    if not item:
+                        continue
+
+                    items.append(item)
+                    date_suffix = f" | {item['published_at']}" if item.get("published_at") else ""
+                    print(f"[IXBT-API] ✅ {item['title'][:50]}...{date_suffix}")
+
+                if not data.get("data"):
+                    break
+
+                page += 1
+
+        print(f"[IXBT-API] ИТОГО найдено новостей: {len(items)}")
+        return items
+
+    except (json.JSONDecodeError, aiohttp.ClientError, KeyError) as e:
+        print(f"[IXBT-API] ❌ Ошибка при парсинге {api_url}: {e}")
+        return []
+
+async def parse_ixbt_sources() -> List[Dict]:
+    """Парсит все источники из IXBT_SOURCES"""
+    print(f"\n[IXBT] === Начало парсинга ===")
+    print(f"[IXBT] Источников для обработки: {len(ixbt_sources_list)}")
+
+    if not ixbt_sources_list:
+        print("[IXBT] ⚠️ Список источников IXBT_SOURCES пустой!")
+        return []
+
+    results = await asyncio.gather(
+        *[parse_ixbt_api(source_url) for source_url in ixbt_sources_list],
+        return_exceptions=True,
+    )
+
+    seen_urls = set()
+    items = []
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            print(f"[IXBT] ❌ Исключение от источника {i}: {result}")
+            continue
+        for item in result:
+            if item["url"] in seen_urls:
+                continue
+            seen_urls.add(item["url"])
+            items.append(item)
+
+    print(f"[IXBT] Всего уникальных публикаций: {len(items)}")
+    print(f"[IXBT] === Конец парсинга ===\n")
+    return items
 
 async def parse_ixbt_car(source_url: str) -> List[Dict]:
     """Специализированный парсер для iXBT.com раздел Автомобили"""

@@ -1,49 +1,111 @@
+import re
+from pathlib import Path
+import tempfile
+
 from aiogram import Router, types, F
 from aiogram.filters import Command
 from services.image_processor import process_image
+from services.cover_storage import get_publication_cover_path, PROJECT_ROOT
+from database.db import get_publications_by_ids
 from aiogram.types import FSInputFile
-from pathlib import Path
-import tempfile
 
 router = Router()
 
 @router.message(Command("images"))
 async def cmd_images_start(message: types.Message):
-    """Обработчик команды /images - начало"""
-    await message.answer(
-        "📸 Отправьте мне изображение или несколько изображений.\n"
-        "Я уменьшу их до нужного размера."
-    )
+    """Обработчик команды /images"""
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        await message.answer(
+            "📸 Отправьте изображение или укажите ID публикаций.\n"
+            "Пример: <code>/images 1, 2, 3</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    raw_ids = re.sub(r"[^\d,]", "", args[1])
+    try:
+        ids = [int(x) for x in raw_ids.split(",") if x]
+    except ValueError:
+        await message.answer("⚠️ Ошибка формата ID.")
+        return
+
+    if not ids:
+        await message.answer("⚠️ Не найдено ни одного валидного ID.")
+        return
+
+    await message.answer(f"⏳ Обрабатываю обложки для {len(ids)} публикаций...")
+
+    publications = await get_publications_by_ids(ids)
+    found_ids = {pub["id"] for pub in publications}
+    missing_ids = set(ids) - found_ids
+
+    success_count = 0
+    errors = []
+
+    for pub in publications:
+        cover_path = None
+        if pub.get("cover_path"):
+            candidate = PROJECT_ROOT / pub["cover_path"]
+            if candidate.exists():
+                cover_path = candidate
+
+        if cover_path is None:
+            cover_path = get_publication_cover_path(pub["id"])
+
+        if not cover_path or not cover_path.exists():
+            errors.append(f"ID {pub['id']}: обложка не найдена")
+            continue
+
+        try:
+            processed_bytes = await process_image(cover_path.read_bytes())
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
+                temp_file.write(processed_bytes)
+                temp_path = temp_file.name
+
+            processed_photo = FSInputFile(temp_path)
+            caption = f"✅ ID {pub['id']}: {pub['title'][:120]}"
+            await message.answer_photo(processed_photo, caption=caption)
+            Path(temp_path).unlink()
+            success_count += 1
+
+        except Exception as e:
+            errors.append(f"ID {pub['id']}: {str(e)[:100]}")
+
+    report = f"✅ Обработано изображений: {success_count}"
+    if missing_ids:
+        report += f"\n⚠️ ID не найдены в БД: {', '.join(map(str, sorted(missing_ids)))}"
+    if errors:
+        report += "\n\n<b>Ошибки:</b>\n" + "\n".join(f"• {error}" for error in errors[:5])
+        if len(errors) > 5:
+            report += f"\n... и ещё {len(errors) - 5}"
+
+    await message.answer(report, parse_mode="HTML")
 
 @router.message(F.photo)
 async def handle_photo(message: types.Message):
     """Обработчик получения фото"""
-    # Получаем самое большое фото из сообщения
     photo = message.photo[-1]
-    
+
     await message.answer("⏳ Обрабатываю изображение...")
-    
+
     try:
-        # Скачиваем фото
         file = await message.bot.get_file(photo.file_id)
         file_bytes = await message.bot.download_file(file.file_path)
         image_bytes = file_bytes.read()
-        
-        # Обрабатываем изображение
+
         processed_bytes = await process_image(image_bytes)
-        
-        # Сохраняем во временный файл
+
         with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_file:
             temp_file.write(processed_bytes)
             temp_path = temp_file.name
-        
-        # Отправляем обработанное изображение
+
         processed_photo = FSInputFile(temp_path)
         await message.answer_photo(processed_photo, caption="✅ Обработанное изображение")
-        
-        # Удаляем временный файл
+
         Path(temp_path).unlink()
-        
+
     except Exception as e:
         await message.answer(f"❌ Ошибка при обработке изображения: {str(e)}")
 
@@ -51,34 +113,28 @@ async def handle_photo(message: types.Message):
 async def handle_document(message: types.Message):
     """Обработчик получения документа (изображения как файл)"""
     document = message.document
-    
-    # Проверяем, что это изображение
+
     if not document.mime_type.startswith('image/'):
         await message.answer("⚠️ Пожалуйста, отправьте изображение.")
         return
-    
+
     await message.answer("⏳ Обрабатываю изображение...")
-    
+
     try:
-        # Скачиваем документ
         file = await message.bot.get_file(document.file_id)
         file_bytes = await message.bot.download_file(file.file_path)
         image_bytes = file_bytes.read()
-        
-        # Обрабатываем изображение
+
         processed_bytes = await process_image(image_bytes)
-        
-        # Сохраняем во временный файл
+
         with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_file:
             temp_file.write(processed_bytes)
             temp_path = temp_file.name
-        
-        # Отправляем как документ
+
         processed_doc = FSInputFile(temp_path, filename=f"processed_{document.file_name}")
         await message.answer_document(processed_doc, caption="✅ Обработанное изображение")
-        
-        # Удаляем временный файл
+
         Path(temp_path).unlink()
-        
+
     except Exception as e:
         await message.answer(f"❌ Ошибка при обработке изображения: {str(e)}")

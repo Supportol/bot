@@ -1,4 +1,9 @@
 .env
 *.pyc
 *.db
-AGENTS.md
+*.sh
+images/**
+!images/.gitkeep
+*.log
+*.pid
+venv
