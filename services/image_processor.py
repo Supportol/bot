@@ -46,10 +46,24 @@ async def process_image(image_bytes: bytes) -> bytes:
         watermark = Image.open(WATERMARK_PATH).convert("RGBA")
         canvas = background.convert("RGBA")
 
-        # Если watermark больше изображения, пропорционально уменьшаем
+        # Пропорционально уменьшаем: не больше доли холста и не больше самого изображения
         max_w = max(1, target_width - WATERMARK_MARGIN * 2)
         max_h = max(1, target_height - WATERMARK_MARGIN * 2)
-        wm_scale = min(max_w / watermark.width, max_h / watermark.height, 1.0)
+        max_wm_w = max(
+            1,
+            int(target_width * image_config["image_processing"].get("watermark_max_width_ratio", 0.22)),
+        )
+        max_wm_h = max(
+            1,
+            int(target_height * image_config["image_processing"].get("watermark_max_width_ratio", 0.22)),
+        )
+        wm_scale = min(
+            max_w / watermark.width,
+            max_h / watermark.height,
+            max_wm_w / watermark.width,
+            max_wm_h / watermark.height,
+            1.0,
+        )
         if wm_scale < 1.0:
             watermark = watermark.resize(
                 (int(watermark.width * wm_scale), int(watermark.height * wm_scale)),

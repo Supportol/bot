@@ -150,17 +150,134 @@ async def parse_rss_feed(feed_url: str) -> List[Dict]:
     
     return []
 
+DROM_HTTP_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Referer": "https://www.drom.ru/",
+}
+
+_DROM_IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
+_DROM_THUMBNAIL_RE = re.compile(r"(?:^|/)(?:gen\d+_|tn_)", re.IGNORECASE)
+
+
+def _is_drom_raster_image_url(url: str) -> bool:
+    if not url:
+        return False
+    path = urlparse(url).path.lower()
+    return path.endswith(_DROM_IMAGE_EXTENSIONS)
+
+
+def _is_drom_thumbnail_image_url(url: str) -> bool:
+    if not url:
+        return True
+    return bool(_DROM_THUMBNAIL_RE.search(urlparse(url).path))
+
+
+def _extract_drom_main_cover_url(soup: BeautifulSoup, article_url: str) -> str | None:
+    """Главная обложка статьи: og:image или первое изображение в .b-media-cont."""
+    og_image = soup.find("meta", property="og:image")
+    if og_image and og_image.get("content"):
+        return urljoin(article_url, og_image["content"])
+
+    media_cont = soup.select_one(".b-media-cont")
+    if media_cont:
+        for img in media_cont.select("img"):
+            src = (img.get("src") or img.get("data-src") or "").strip()
+            if src and not src.lower().endswith(".svg"):
+                return urljoin(article_url, src)
+
+    return None
+
+
+def _extract_drom_clickable_cover_url(soup: BeautifulSoup, article_url: str) -> str | None:
+    """Первая кликабельная картинка статьи в нормальном разрешении (href ссылки, не превью)."""
+    scopes = []
+    for selector in (".b-left-side", ".b-media-cont", "div.news_img"):
+        scopes.extend(soup.select(selector))
+
+    seen_scopes = set()
+    unique_scopes = []
+    for scope in scopes:
+        scope_id = id(scope)
+        if scope_id in seen_scopes:
+            continue
+        seen_scopes.add(scope_id)
+        unique_scopes.append(scope)
+
+    if not unique_scopes:
+        unique_scopes = [soup]
+
+    for scope in unique_scopes:
+        for link in scope.select("a[href]"):
+            href = (link.get("href") or "").strip()
+            if not _is_drom_raster_image_url(href):
+                continue
+            if _is_drom_thumbnail_image_url(href):
+                continue
+            if "/com/" in urlparse(href).path:
+                continue
+
+            img = link.select_one("img")
+            if not img:
+                continue
+
+            src = (img.get("src") or img.get("data-src") or "").strip()
+            if src.lower().endswith(".svg"):
+                continue
+
+            return urljoin(article_url, href)
+
+    return None
+
+
+def extract_drom_cover_url(
+    html: str,
+    article_url: str,
+    fallback_url: str | None = None,
+) -> str | None:
+    """Выбирает обложку Drom: кликабельное фото -> главная -> fallback с ленты."""
+    soup = BeautifulSoup(html, "lxml")
+
+    clickable_cover = _extract_drom_clickable_cover_url(soup, article_url)
+    if clickable_cover:
+        return clickable_cover
+
+    main_cover = _extract_drom_main_cover_url(soup, article_url)
+    if main_cover:
+        return main_cover
+
+    return fallback_url
+
+
+async def fetch_drom_cover_url(
+    session: aiohttp.ClientSession,
+    article_url: str,
+    fallback_url: str | None = None,
+) -> str | None:
+    """Загружает страницу статьи Drom и возвращает URL обложки."""
+    try:
+        async with session.get(article_url, headers=DROM_HTTP_HEADERS, timeout=15) as response:
+            if response.status != 200:
+                print(f"[DROM] ⚠️ Не удалось загрузить статью {article_url}: HTTP {response.status}")
+                return fallback_url
+            html = await response.text()
+    except Exception as e:
+        print(f"[DROM] ⚠️ Ошибка загрузки статьи {article_url}: {e}")
+        return fallback_url
+
+    cover_url = extract_drom_cover_url(html, article_url, fallback_url=fallback_url)
+    if cover_url and cover_url != fallback_url:
+        print(f"[DROM] Cover from article: {cover_url}")
+    return cover_url
+
+
 async def parse_drom_honda(source_url: str) -> List[Dict]:
     """Парсер раздела Honda на news.drom.ru — карточки b-info-block на HTML-странице."""
     print(f"[DROM] Пытаюсь загрузить: {source_url}")
 
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Referer": "https://www.drom.ru/",
-        }
+        headers = DROM_HTTP_HEADERS
 
         async with aiohttp.ClientSession() as session:
             async with session.get(source_url, headers=headers, timeout=15) as response:
@@ -171,53 +288,54 @@ async def parse_drom_honda(source_url: str) -> List[Dict]:
                 html = await response.text()
                 print(f"[DROM] Получено байт: {len(html)}")
 
-        soup = BeautifulSoup(html, "lxml")
-        items = []
-        seen_urls = set()
+            soup = BeautifulSoup(html, "lxml")
+            items = []
+            seen_urls = set()
 
-        cards = soup.select(".b-info-block.b-info-block_like-text a.b-info-block__cont[href]")
-        print(f"[DROM] Карточек на странице: {len(cards)}, лимит: {max_news_per_source}")
+            cards = soup.select(".b-info-block.b-info-block_like-text a.b-info-block__cont[href]")
+            print(f"[DROM] Карточек на странице: {len(cards)}, лимит: {max_news_per_source}")
 
-        for card in cards:
-            if len(items) >= max_news_per_source:
-                break
+            for card in cards:
+                if len(items) >= max_news_per_source:
+                    break
 
-            href = urljoin(source_url, card["href"])
-            if href in seen_urls:
-                continue
+                href = urljoin(source_url, card["href"])
+                if href in seen_urls:
+                    continue
 
-            if "news.drom.ru" not in href or not href.endswith(".html"):
-                continue
+                if "news.drom.ru" not in href or not href.endswith(".html"):
+                    continue
 
-            title_el = card.select_one(".b-info-block__title")
-            title = title_el.get_text(strip=True) if title_el else ""
-            if len(title) < 10:
-                continue
+                title_el = card.select_one(".b-info-block__title")
+                title = title_el.get_text(strip=True) if title_el else ""
+                if len(title) < 10:
+                    continue
 
-            date_el = card.select_one(".b-info-block__text_type_news-date")
-            date_str = date_el.get_text(strip=True) if date_el else None
-            published_at = drom_date_to_iso(date_str)
+                date_el = card.select_one(".b-info-block__text_type_news-date")
+                date_str = date_el.get_text(strip=True) if date_el else None
+                published_at = drom_date_to_iso(date_str)
 
-            img_el = card.select_one("img")
-            cover_url = img_el.get("src") if img_el and img_el.get("src") else None
+                img_el = card.select_one("img")
+                listing_cover_url = img_el.get("src") if img_el and img_el.get("src") else None
+                cover_url = await fetch_drom_cover_url(session, href, fallback_url=listing_cover_url)
 
-            seen_urls.add(href)
-            item = {
-                "title": title,
-                "url": href,
-                "source": source_url,
-                "published_at": published_at,
-                "cover_url": cover_url,
-            }
-            items.append(item)
+                seen_urls.add(href)
+                item = {
+                    "title": title,
+                    "url": href,
+                    "source": source_url,
+                    "published_at": published_at,
+                    "cover_url": cover_url,
+                }
+                items.append(item)
 
-            date_suffix = ""
-            if published_at:
-                date_suffix = f" | {format_publication_datetime(published_at)}"
-            print(f"[DROM] ✅ {title[:60]}...{date_suffix} | {href}")
+                date_suffix = ""
+                if published_at:
+                    date_suffix = f" | {format_publication_datetime(published_at)}"
+                print(f"[DROM] ✅ {title[:60]}...{date_suffix} | {href}")
 
-        print(f"\n[DROM] ИТОГО взято новостей: {len(items)}")
-        return items
+            print(f"\n[DROM] ИТОГО взято новостей: {len(items)}")
+            return items
 
     except Exception as e:
         print(f"[DROM] ❌ Ошибка при парсинге {source_url}: {e}")

@@ -2,6 +2,7 @@
   "image_processing": {
     "width": 735,
     "height": 454,
-    "quality": 85
+    "quality": 95,
+    "watermark_max_width_ratio": 0.22
   }
 }

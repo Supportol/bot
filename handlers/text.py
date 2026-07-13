@@ -1,3 +1,5 @@
+import html
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -27,12 +29,65 @@ def _build_markdown(pub: dict, text: str) -> str:
     return f"# {title}\n\nИсточник: {url}\n\n---\n\n{text.strip()}\n"
 
 
-def _build_news_md(rewritten_text: str) -> str:
+def _extract_source_title(source_md: str) -> str:
+    for line in (source_md or "").splitlines():
+        if line.startswith("# "):
+            return line[2:].strip()
+    return ""
+
+
+def _prepend_title_to_text(title: str, text: str) -> str:
+    """Добавляет заголовок из source.md перед основным текстом для единого рерайта."""
+    title = (title or "").strip()
+    body = (text or "").strip()
+    if not title:
+        return body
+    if not body:
+        return title
+    return f"{title}\n\n{body}"
+
+
+def _extract_rewritten_title_and_body(rewritten: str) -> tuple[str, str]:
+    """Извлекает переписанный заголовок из начала текста и возвращает (заголовок, тело)."""
+    text = (rewritten or "").strip()
+    if not text:
+        return "", ""
+
+    match = re.match(r"^(.+?[.!?])(\s+(.*))?$", text, re.DOTALL)
+    if match:
+        body = (match.group(3) or "").strip()
+        if body:
+            return match.group(1).strip(), body
+
+    parts = [part.strip() for part in text.split("\n\n") if part.strip()]
+    if len(parts) >= 2:
+        return parts[0], "\n\n".join(parts[1:])
+
+    if match:
+        return match.group(1).strip(), ""
+
+    return text, ""
+
+
+def _build_news_md(rewritten_text: str, image_filename: str, title: str) -> str:
     text = (rewritten_text or "").strip()
     if not text:
         return ""
+
+    title = (title or "").strip()
+    title_escaped = html.escape(title, quote=True)
+    image_tag = (
+        f'<p><img src="/_upload/content/news/{image_filename}" '
+        f'alt="{title_escaped}" /></p>'
+    )
     paragraphs = [chunk.strip() for chunk in text.split("\n\n") if chunk.strip()]
-    return "\n".join(f"<p>{paragraph}</p>" for paragraph in paragraphs) + "\n"
+    body = "\n".join(f"<p>{paragraph}</p>" for paragraph in paragraphs)
+
+    return (
+        f"1. Заголовок: {title}\n"
+        f"2. Картинка: {image_tag}\n\n"
+        f"{body}\n"
+    )
 
 def _find_processed_image(pub: dict) -> Path | None:
     """Ищет обработанное изображение в images/.../<id>/res/*.jpg."""
@@ -66,7 +121,17 @@ async def _process_ids(message: types.Message, ids: list[str], state: FSMContext
         try:
             source_text = await extract_text_from_url(pub["url"])
             await update_publication_text(pub["id"], source_text)
-            rewritten_text = await rewrite_text_via_text_ru(source_text, creative=5)
+
+            source_md = _build_markdown(pub, source_text)
+            source_title = _extract_source_title(source_md)
+            if not source_title:
+                raise RewriteError("Не удалось извлечь заголовок из source.md")
+
+            text_for_rewrite = _prepend_title_to_text(source_title, source_text)
+            rewritten_combined = await rewrite_text_via_text_ru(text_for_rewrite, creative=5)
+            rewritten_title, rewritten_text = _extract_rewritten_title_and_body(rewritten_combined)
+            if not rewritten_title:
+                raise RewriteError("Не удалось извлечь заголовок из результата рерайта")
 
             processed_image = _find_processed_image(pub)
             if not processed_image:
@@ -80,9 +145,13 @@ async def _process_ids(message: types.Message, ids: list[str], state: FSMContext
             shutil.copy2(processed_image, target_image)
 
             md_path = target_dir / "source.md"
-            md_path.write_text(_build_markdown(pub, source_text), encoding="utf-8")
+            md_path.write_text(source_md, encoding="utf-8")
+
             news_md_path = target_dir / "news.md"
-            news_md_path.write_text(_build_news_md(rewritten_text), encoding="utf-8")
+            news_md_path.write_text(
+                _build_news_md(rewritten_text, processed_image.name, rewritten_title),
+                encoding="utf-8",
+            )
             success_count += 1
         except RewriteError as e:
             errors.append(f"{pub['id']}: ошибка рерайта: {str(e)[:120]}")

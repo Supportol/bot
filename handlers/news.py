@@ -4,6 +4,7 @@ from aiogram.filters import Command
 from config import drom_sources_list
 from database.db import get_latest_publications, save_publication, update_publication_cover_path
 from handlers.images import process_publication_covers
+from handlers.telegram_messages import answer_long_blocks
 from services.cover_storage import save_publication_cover
 from services.datetime_utils import format_publication_datetime
 from services.news_parser import parse_drom_honda, parse_ixbt_sources, parse_motor_sources
@@ -60,12 +61,19 @@ async def cmd_news(message: types.Message):
                 )
                 return
 
-            result_text = "📋 <b>Последние сохранённые публикации:</b>\n\n"
+            blocks = []
             for pub in latest:
                 status_icon = "✅" if pub["status"] == "text_fetched" else "🆕"
-                result_text += f"{status_icon} {_format_publication_line(pub)}"
+                blocks.append(f"{status_icon} {_format_publication_line(pub)}")
 
-            await message.answer(result_text, parse_mode="HTML", disable_web_page_preview=True)
+            await answer_long_blocks(
+                message,
+                blocks,
+                "📋 <b>Последние сохранённые публикации:</b>\n\n",
+                continuation_header="📋 <b>Продолжение списка публикаций:</b>\n\n",
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
             return
 
         new_publications = []
@@ -99,16 +107,22 @@ async def cmd_news(message: types.Message):
             await message.answer("✅ Все новости уже в базе данных. Новых нет.")
             return
 
-        result_text = f"🆕 <b>Новые публикации ({len(new_publications)} шт.):</b>\n\n"
-        for pub in new_publications:
-            result_text += _format_publication_line(pub)
+        blocks = [_format_publication_line(pub) for pub in new_publications]
 
         processed_count, image_errors = await process_publication_covers(new_publications)
-        result_text += f"🖼 Автообработка обложек: {processed_count}/{len(new_publications)}\n"
+        footer = f"🖼 Автообработка обложек: {processed_count}/{len(new_publications)}\n"
         if image_errors:
-            result_text += f"⚠️ Ошибок обработки: {len(image_errors)}\n"
+            footer += f"⚠️ Ошибок обработки: {len(image_errors)}\n"
 
-        await message.answer(result_text, parse_mode="HTML", disable_web_page_preview=True)
+        await answer_long_blocks(
+            message,
+            blocks,
+            f"🆕 <b>Новые публикации ({len(new_publications)} шт.):</b>\n\n",
+            continuation_header="🆕 <b>Продолжение списка публикаций:</b>\n\n",
+            footer=footer,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
 
     except Exception as e:
         await message.answer(f"❌ Ошибка при поиске новостей: {str(e)}")

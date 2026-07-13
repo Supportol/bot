@@ -61,9 +61,13 @@ async def save_publication_cover(pub_id: str, title: str, cover_url: str) -> Opt
     pub_dir = IMAGES_DIR / date_dir / str(pub_id)
     pub_dir.mkdir(parents=True, exist_ok=True)
 
+    headers = dict(HTTP_HEADERS)
+    if "drom.ru" in urlparse(cover_url).netloc:
+        headers["Referer"] = "https://www.drom.ru/"
+
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(cover_url, headers=HTTP_HEADERS, timeout=15) as response:
+            async with session.get(cover_url, headers=headers, timeout=15) as response:
                 if response.status != 200:
                     print(f"[COVER] ❌ HTTP {response.status} для ID {pub_id}: {cover_url}")
                     return None
